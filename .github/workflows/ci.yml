@@ -1,0 +1,25 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  build-and-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate compose file
+        run: |
+          cp .env.example .env
+          docker compose config -q
+
+      - name: Build images
+        run: |
+          docker build -t telemetry-api:ci ./api
+          docker build -t telemetry-simulator:ci ./simulator
+
+      - name: Scan API image (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0   # check latest version
+        with:
+          image-ref: telemetry-api:ci
+          severity: CRITICAL,HIGH
+          exit-code: "0"   # switch to "1" once the baseline is clean
