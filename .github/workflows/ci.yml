@@ -1,5 +1,10 @@
 name: CI
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   build-and-scan:
@@ -23,3 +28,26 @@ jobs:
           image-ref: telemetry-api:ci
           severity: CRITICAL,HIGH
           exit-code: "0"   # switch to "1" once the baseline is clean
+
+  publish:
+    needs: build-and-scan
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push images
+        run: |
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"   # registry names must be lowercase
+          for svc in api simulator; do
+            IMAGE="ghcr.io/${OWNER}/telemetry-${svc}"
+            docker build -t "${IMAGE}:${GITHUB_SHA}" -t "${IMAGE}:latest" "./${svc}"
+            docker push "${IMAGE}:${GITHUB_SHA}"
+            docker push "${IMAGE}:latest"
+          done
