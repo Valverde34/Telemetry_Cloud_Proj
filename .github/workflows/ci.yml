@@ -29,8 +29,45 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "0"   # switch to "1" once the baseline is clean
 
+  smoke-test:
+    # Starts the whole stack and checks that it really works end to end.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start stack
+        run: |
+          cp .env.example .env
+          docker compose up -d --build
+
+      - name: Readings reach the database
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf localhost:8000/readings | grep -q '"value"'; then
+              echo "OK: readings are flowing"; exit 0
+            fi
+            sleep 2
+          done
+          echo "No readings after 60s"; exit 1
+
+      - name: Anonymous MQTT clients are rejected
+        run: |
+          if docker compose exec -T mosquitto \
+               mosquitto_pub -h localhost -t sensors/test -m '{"value": 1}'; then
+            echo "Anonymous publish was accepted!"; exit 1
+          fi
+          echo "OK: anonymous publish rejected"
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v
+
   publish:
-    needs: build-and-scan
+    needs: [build-and-scan, smoke-test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
