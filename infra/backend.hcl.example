@@ -1,0 +1,6 @@
+# Copy to backend.hcl (ignored by git) and fill in with the values printed by
+#   terraform -chdir=infra/bootstrap output -raw backend_hcl
+resource_group_name  = "rg-telemetry-bootstrap"
+storage_account_name = "sttelemetrytfXXXXXX"
+container_name       = "tfstate"
+key                  = "telemetry.tfstate"

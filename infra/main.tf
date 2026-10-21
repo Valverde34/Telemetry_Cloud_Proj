@@ -1,17 +1,3 @@
-terraform {
-  required_version = ">= 1.5"
-  required_providers {
-    azurerm = {
-      source  = "hashicorp/azurerm"
-      version = "~> 4.0"
-    }
-  }
-}
-
-provider "azurerm" {
-  features {}
-}
-
 locals {
   app_cidr  = "10.0.1.0/24"
   data_cidr = "10.0.2.0/24"
@@ -22,6 +8,15 @@ resource "azurerm_resource_group" "main" {
   location = var.location
 }
 
+# Some Azure names must be globally unique.
+resource "random_string" "suffix" {
+  length  = 6
+  upper   = false
+  special = false
+}
+
+# --- Network ----------------------------------------------------------------
+
 resource "azurerm_virtual_network" "main" {
   name                = "vnet-${var.project}"
   location            = azurerm_resource_group.main.location
@@ -29,18 +24,38 @@ resource "azurerm_virtual_network" "main" {
   address_space       = ["10.0.0.0/16"]
 }
 
+# App subnet: hosts the Container Apps environment.
 resource "azurerm_subnet" "app" {
   name                 = "snet-app"
   resource_group_name  = azurerm_resource_group.main.name
   virtual_network_name = azurerm_virtual_network.main.name
   address_prefixes     = [local.app_cidr]
+
+  delegation {
+    name = "container-apps"
+
+    service_delegation {
+      name    = "Microsoft.App/environments"
+      actions = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
+    }
+  }
 }
 
+# Data subnet: hosts PostgreSQL, reachable only from the app subnet.
 resource "azurerm_subnet" "data" {
   name                 = "snet-data"
   resource_group_name  = azurerm_resource_group.main.name
   virtual_network_name = azurerm_virtual_network.main.name
   address_prefixes     = [local.data_cidr]
+
+  delegation {
+    name = "postgres"
+
+    service_delegation {
+      name    = "Microsoft.DBforPostgreSQL/flexibleServers"
+      actions = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
+    }
+  }
 }
 
 resource "azurerm_network_security_group" "data" {

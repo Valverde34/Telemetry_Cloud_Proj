@@ -1,14 +1,12 @@
+# Before the first run:  cp .env.example .env  &&  sh scripts/gen-certs.sh
 services:
   mosquitto:
-    image: eclipse-mosquitto:2
-    command: ["sh", "/mosquitto/start.sh"]
+    build: ./mosquitto
     environment:
       MQTT_API_PASSWORD: ${MQTT_API_PASSWORD:?set MQTT_API_PASSWORD in .env}
       MQTT_SIMULATOR_PASSWORD: ${MQTT_SIMULATOR_PASSWORD:?set MQTT_SIMULATOR_PASSWORD in .env}
     volumes:
-      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-      - ./mosquitto/acl:/mosquitto/config/acl:ro
-      - ./mosquitto/start.sh:/mosquitto/start.sh:ro
+      - ./certs:/mosquitto/certs:ro   # created by scripts/gen-certs.sh
     networks: [messaging]
     restart: unless-stopped
 
@@ -31,9 +29,13 @@ services:
     # simulator's MQTT password into this container).
     environment:
       MQTT_HOST: mosquitto
+      MQTT_PORT: "8883"
+      MQTT_CA_FILE: /certs/ca.crt
       MQTT_USERNAME: api
       MQTT_PASSWORD: ${MQTT_API_PASSWORD:?set MQTT_API_PASSWORD in .env}
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    volumes:
+      - ./certs/ca.crt:/certs/ca.crt:ro   # only the CA certificate, never the keys
     ports:
       - "8000:8000"
     depends_on:
@@ -48,8 +50,12 @@ services:
     build: ./simulator
     environment:
       MQTT_HOST: mosquitto
+      MQTT_PORT: "8883"
+      MQTT_CA_FILE: /certs/ca.crt
       MQTT_USERNAME: simulator
       MQTT_PASSWORD: ${MQTT_SIMULATOR_PASSWORD:?set MQTT_SIMULATOR_PASSWORD in .env}
+    volumes:
+      - ./certs/ca.crt:/certs/ca.crt:ro
     depends_on: [mosquitto]
     networks: [messaging]
     restart: unless-stopped
