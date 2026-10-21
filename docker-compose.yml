@@ -1,8 +1,14 @@
 services:
   mosquitto:
     image: eclipse-mosquitto:2
+    command: ["sh", "/mosquitto/start.sh"]
+    environment:
+      MQTT_API_PASSWORD: ${MQTT_API_PASSWORD:?set MQTT_API_PASSWORD in .env}
+      MQTT_SIMULATOR_PASSWORD: ${MQTT_SIMULATOR_PASSWORD:?set MQTT_SIMULATOR_PASSWORD in .env}
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/acl:/mosquitto/config/acl:ro
+      - ./mosquitto/start.sh:/mosquitto/start.sh:ro
     networks: [messaging]
     restart: unless-stopped
 
@@ -21,9 +27,12 @@ services:
 
   api:
     build: ./api
-    env_file: .env
+    # Only the variables the API needs (no env_file: it would also leak the
+    # simulator's MQTT password into this container).
     environment:
       MQTT_HOST: mosquitto
+      MQTT_USERNAME: api
+      MQTT_PASSWORD: ${MQTT_API_PASSWORD:?set MQTT_API_PASSWORD in .env}
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
     ports:
       - "8000:8000"
@@ -39,6 +48,8 @@ services:
     build: ./simulator
     environment:
       MQTT_HOST: mosquitto
+      MQTT_USERNAME: simulator
+      MQTT_PASSWORD: ${MQTT_SIMULATOR_PASSWORD:?set MQTT_SIMULATOR_PASSWORD in .env}
     depends_on: [mosquitto]
     networks: [messaging]
     restart: unless-stopped

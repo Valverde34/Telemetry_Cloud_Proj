@@ -1,0 +1,10 @@
+# Each MQTT user only gets the access it needs.
+# Anything not listed here is denied.
+
+# The simulator only publishes sensor readings.
+user simulator
+topic write sensors/#
+
+# The API only subscribes to sensor readings.
+user api
+topic read sensors/#

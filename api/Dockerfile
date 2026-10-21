@@ -4,6 +4,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
+# Code is owned by root and read-only for everyone else, whatever the
+# file permissions were on the build machine.
+RUN chmod -R a+rX,go-w /app
 RUN useradd --system --uid 10001 appuser
 USER appuser
 EXPOSE 8000

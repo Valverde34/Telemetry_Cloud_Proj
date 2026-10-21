@@ -9,6 +9,8 @@ from fastapi import FastAPI
 
 DB_URL = os.environ["DATABASE_URL"]
 MQTT_HOST = os.getenv("MQTT_HOST", "mosquitto")
+MQTT_USERNAME = os.environ["MQTT_USERNAME"]
+MQTT_PASSWORD = os.environ["MQTT_PASSWORD"]
 TOPIC = "sensors/#"
 
 
@@ -31,6 +33,9 @@ def init_db() -> None:
 
 
 def on_connect(client, userdata, flags, reason_code, properties):
+    if reason_code.is_failure:
+        print(f"MQTT connection refused: {reason_code}", flush=True)
+        return
     client.subscribe(TOPIC)
 
 
@@ -49,6 +54,7 @@ def on_message(client, userdata, msg):
 async def lifespan(app: FastAPI):
     init_db()
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
     client.on_connect = on_connect
     client.on_message = on_message
     client.connect_async(MQTT_HOST, 1883)
