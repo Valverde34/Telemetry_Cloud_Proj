@@ -1,4 +1,4 @@
-name: CI
+name: CI/CD
 on:
   push:
   pull_request:
@@ -7,30 +7,47 @@ permissions:
   contents: read
 
 jobs:
+  # 1. Build every image and scan it for known vulnerabilities.
   build-and-scan:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [api, simulator, mosquitto]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t telemetry-${{ matrix.service }}:ci ./${{ matrix.service }}
+
+      - name: Scan image (Trivy)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref: telemetry-${{ matrix.service }}:ci
+          severity: CRITICAL,HIGH
+          exit-code: "0"   # switch to "1" once the baseline is clean
+
+  # 2. Check the Terraform code (formatting + validity), without touching Azure.
+  terraform:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate compose file
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e  # v4.0.1
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff infra
+
+      - name: terraform validate
         run: |
-          cp .env.example .env
-          docker compose config -q
+          for dir in infra/bootstrap infra; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
 
-      - name: Build images
-        run: |
-          docker build -t telemetry-api:ci ./api
-          docker build -t telemetry-simulator:ci ./simulator
-
-      - name: Scan API image (Trivy)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
-        with:
-          image-ref: telemetry-api:ci
-          severity: CRITICAL,HIGH
-          exit-code: "0"   # switch to "1" once the baseline is clean
-
+  # 3. Start the whole stack and check it really works, end to end.
   smoke-test:
-    # Starts the whole stack and checks that it really works end to end.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,25 +55,38 @@ jobs:
       - name: Start stack
         run: |
           cp .env.example .env
+          sh scripts/gen-certs.sh
+          docker compose config -q
           docker compose up -d --build
 
       - name: Readings reach the database
         run: |
           for i in $(seq 1 30); do
-            if curl -sf localhost:8000/readings | grep -q '"value"'; then
-              echo "OK: readings are flowing"; exit 0
+            if curl -sf localhost:8000/health/data; then
+              echo; echo "OK: readings are flowing"; exit 0
             fi
             sleep 2
           done
           echo "No readings after 60s"; exit 1
 
-      - name: Anonymous MQTT clients are rejected
+      - name: Broker security
         run: |
-          if docker compose exec -T mosquitto \
-               mosquitto_pub -h localhost -t sensors/test -m '{"value": 1}'; then
-            echo "Anonymous publish was accepted!"; exit 1
-          fi
-          echo "OK: anonymous publish rejected"
+          set -u
+          pub() { docker compose exec -T mosquitto sh -c "mosquitto_pub -t sensors/test -m '{\"value\": 1}' $1"; }
+          TLS="-h localhost -p 8883 --cafile /mosquitto/certs/ca.crt"
+
+          # Positive control: a valid client can publish (so the checks below fail for the right reason).
+          pub "$TLS -u simulator -P \"\$MQTT_SIMULATOR_PASSWORD\"" || { echo "Valid client rejected!"; exit 1; }
+          echo "OK: valid client accepted"
+
+          if pub "$TLS"; then echo "Anonymous client accepted!"; exit 1; fi
+          echo "OK: anonymous client rejected"
+
+          if pub "$TLS -u simulator -P wrong-password"; then echo "Wrong password accepted!"; exit 1; fi
+          echo "OK: wrong password rejected"
+
+          if pub "-h localhost -p 1883 -u simulator -P \"\$MQTT_SIMULATOR_PASSWORD\""; then echo "Plaintext port open!"; exit 1; fi
+          echo "OK: no plaintext (non-TLS) port"
 
       - name: Show logs on failure
         if: failure()
@@ -66,8 +96,9 @@ jobs:
         if: always()
         run: docker compose down -v
 
+  # 4. Publish the images to GitHub Container Registry (main branch only).
   publish:
-    needs: [build-and-scan, smoke-test]
+    needs: [build-and-scan, terraform, smoke-test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -82,9 +113,50 @@ jobs:
       - name: Build and push images
         run: |
           OWNER="${GITHUB_REPOSITORY_OWNER,,}"   # registry names must be lowercase
-          for svc in api simulator; do
+          for svc in api simulator mosquitto; do
             IMAGE="ghcr.io/${OWNER}/telemetry-${svc}"
             docker build -t "${IMAGE}:${GITHUB_SHA}" -t "${IMAGE}:latest" "./${svc}"
             docker push "${IMAGE}:${GITHUB_SHA}"
             docker push "${IMAGE}:latest"
           done
+
+  # 5. Deploy the new images to Azure Container Apps.
+  #    Skipped until the Azure infrastructure exists (see docs/deploy-azure.md).
+  deploy:
+    needs: publish
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AZURE_CLIENT_ID != ''
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write   # lets the job get a short-lived OIDC token: no Azure password stored in GitHub
+    env:
+      RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+    steps:
+      - name: Log in to Azure (OIDC)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906  # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy images tagged with this commit
+        run: |
+          az config set extension.use_dynamic_install=yes_without_prompt --only-show-errors
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          for app in mosquitto api simulator; do
+            echo "Deploying $app"
+            az containerapp update -g "$RG" -n "$app" \
+              --image "ghcr.io/${OWNER}/telemetry-${app}:${GITHUB_SHA}" --output none
+          done
+
+      - name: Check the deployment is healthy
+        run: |
+          FQDN=$(az containerapp show -g "$RG" -n api --query properties.configuration.ingress.fqdn -o tsv)
+          for i in $(seq 1 30); do
+            if curl -sf "https://${FQDN}/health/data"; then
+              echo; echo "OK: https://${FQDN} is healthy"; exit 0
+            fi
+            sleep 10
+          done
+          echo "Deployment unhealthy after 5 minutes"; exit 1
