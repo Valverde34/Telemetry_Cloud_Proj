@@ -28,7 +28,7 @@ resource "tls_cert_request" "mqtt_server" {
   private_key_pem = tls_private_key.mqtt_server.private_key_pem
 
   # Names the clients may use to reach the broker inside the environment.
-  dns_names = ["mosquitto", local.mqtt_host]
+  dns_names = ["mosquitto", "mosquitto.internal.${azurerm_container_app_environment.main.default_domain}"]
 
   subject {
     common_name = "mosquitto"

@@ -34,8 +34,9 @@ resource "azurerm_container_app_environment" "main" {
 locals {
   image_prefix = "ghcr.io/${var.ghcr_owner}/telemetry"
 
-  # Internal hostname of the broker inside the environment (not reachable from the internet).
-  mqtt_host = "mosquitto.internal.${azurerm_container_app_environment.main.default_domain}"
+  # Apps in the same environment reach a TCP app by its name. The broker has no
+  # public address: it is only reachable from inside the environment.
+  mqtt_host = "mosquitto"
 }
 
 # --- MQTT broker --------------------------------------------------------------

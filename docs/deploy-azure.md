@@ -105,9 +105,6 @@ A later `terraform apply` recreates everything; the deploy job then works again.
 - **PostgreSQL "location is restricted"**: some regions limit new subscriptions;
   set `location` in `terraform.tfvars` (e.g. `westeurope`) and apply again.
 - **Container app can't pull the image**: check the packages are public (step 1).
-- **API/simulator logs show the broker hostname can't be resolved**: set
-  `mqtt_host = "mosquitto"` in `infra/container_apps.tf` (`locals`) and apply again;
-  the TLS certificate is valid for both names.
 - **Deploy job: `AADSTS70021` / no matching federated identity**: the job must run
   in the `production` environment and `github_repo` in bootstrap must match the
   repository name exactly (case-sensitive).
